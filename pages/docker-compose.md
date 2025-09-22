@@ -4,49 +4,64 @@
 	- **网络**：Docker Compose会自动创建一个默认的网络，使得所有服务都可以在一个隔离的环境中相互通信。可以自定义网络
 - `docker-compose.yml`基本结构：
 	- ```yml
-	  # 版本号，推荐使用 "3.8" 或更高版本
-	  version: '3.8'
+	  name: gis-boot
 	  
-	  # 定义所有的服务
 	  services:
-	    # 服务1：例如一个 web 服务器
-	    webapp:
-	      # 构建指令
-	      build: .
-	      # 端口映射 <主机端口>:<容器端口>
-	      ports:
-	        - "8000:8000"
-	      # 卷挂载
-	      volumes:
-	        - .:/code
-	      # 环境变量
+	    db:
+	      image: postgis/postgis:16-3.4
 	      environment:
-	        - DEBUG=true
-	  
-	    # 服务2：例如一个数据库
-	    database:
-	      # 直接使用 Docker Hub 上的镜像
-	      image: postgres:13
-	      # 环境变量
-	      environment:
-	        POSTGRES_USER: user
-	        POSTGRES_PASSWORD: password
-	        POSTGRES_DB: dbname
-	      # 卷挂载，用于持久化数据库数据
+	        POSTGRES_DB: ${PG_DB:-gis}
+	        POSTGRES_USER: ${PG_USER:-postgres}
+	        POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
 	      volumes:
 	        - db_data:/var/lib/postgresql/data
+	      healthcheck:
+	        test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DB:-gis}"]
+	        interval: 10s
+	        timeout: 5s
+	        retries: 5
+	        start_period: 30s
+	      ports: ["5432:5432"]
+	      networks: [backend]
 	  
-	  # 统一管理所有卷
+	    app:
+	      # 本地构建镜像；如已有镜像可改为 image: your-registry/gis-boot:latest
+	      build:
+	        context: .
+	        dockerfile: Dockerfile
+	      environment:
+	        SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${PG_DB:-gis}
+	        SPRING_DATASOURCE_USERNAME: ${PG_USER:-postgres}
+	        SPRING_DATASOURCE_PASSWORD: ${PG_PASSWORD:-postgres}
+	      depends_on:
+	        db:
+	          condition: service_healthy   # 等数据库健康再启动
+	          restart: true                # db 重启时，app 也同步重启
+	      ports: ["8080:8080"]
+	      networks: [backend]
+	  
+	    proxy:
+	      image: nginx:alpine
+	      volumes:
+	        - ./nginx.conf:/etc/nginx/nginx.conf:ro
+	      ports: ["80:80"]
+	      depends_on:
+	        app:
+	          condition: service_started   # app 起来就行（不等健康）
+	      networks: [backend]
+	  
 	  volumes:
 	    db_data:
+	  
+	  networks:
+	    backend:
 	  ```
-	- version：指定Compose文件的版本
-	- wabapp和database：服务的名称
-	- image：直接从Docker Hub拉去指定的镜像
-	- build：告诉 Docker Compose 在指定的路径（`.` 代表当前目录）下寻找一个 `Dockerfile` 文件，并使用它来构建一个自定义镜像。
-	- **ports**：将主机的端口映射到容器的端口
-	- volumes：挂在主机路径或者命名卷到容器中
-		- 命名卷：它的具体存储位置在主机上由 Docker 决定
-		- 绑定挂载：主机上的文件修改会立即反映在容器内，反之亦然
-	- environment：设置环境变量
-	- depends_on：定义服务之间的启动依赖关系
+	- 顶层结构：
+		- **name**：可选，作为项目名
+		- **services**：
+		- **volumes**：
+			- 命名卷：由Docker管理路径。
+			- 绑定宿主目录：把本机的目录直接映射进去
+		- **networks**：
+		- configs：
+		- **secrets**：
